@@ -72,6 +72,11 @@ func RemoveUserFromDb(code string) error {
 	return err
 }
 
+func RemoveUserFromDbByChatID(chatID string) error {
+	_, err := db.Exec("DELETE FROM records WHERE chat_id = ?", chatID)
+	return err
+}
+
 func ReadJsonFromDb(code string) (string, error) {
 	var data string
 	err := db.QueryRow("SELECT data FROM records WHERE code = ?", code).Scan(&data)
