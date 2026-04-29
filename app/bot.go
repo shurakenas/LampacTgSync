@@ -39,15 +39,15 @@ type StateInfo struct {
 	TempUser    *User  `json:"tempUser,omitempty"`
 	EditUserID  string `json:"editUserId,omitempty"`
 	EditAction  string `json:"editAction,omitempty"`
+	MessageID   int    `json:"messageId,omitempty"`
+	MainMsgID   int    `json:"mainMsgId,omitempty"`
+	TempMsgID   int    `json:"tempMsgId,omitempty"`
 }
 
 var adminIDs map[int64]bool = make(map[int64]bool)
 var allowedUserIDs map[int64]bool = make(map[int64]bool)
 
-func isAdmin(chatID int64) bool {
-    return adminIDs[chatID]
-}
-
+// ========== WHITELIST ==========
 func loadWhitelist() error {
 	data, err := os.ReadFile(whitelistPath)
 	if err != nil {
@@ -87,6 +87,10 @@ func isAllowed(chatID int64) bool {
 	return allowedUserIDs[chatID]
 }
 
+func isAdmin(chatID int64) bool {
+	return adminIDs[chatID]
+}
+
 func addToWhitelist(chatID int64) error {
 	allowedUserIDs[chatID] = true
 	return saveWhitelist()
@@ -97,6 +101,7 @@ func removeFromWhitelist(chatID int64) error {
 	return saveWhitelist()
 }
 
+// ========== USERS ==========
 func loadUsers() ([]User, error) {
 	data, err := os.ReadFile(usersJSONPath)
 	if err != nil {
@@ -118,6 +123,7 @@ func saveUsers(users []User) error {
 	return os.WriteFile(usersJSONPath, data, 0644)
 }
 
+// ========== STATES ==========
 func loadStates() ([]StateInfo, error) {
 	data, err := os.ReadFile(stateJSONPath)
 	if err != nil {
@@ -139,6 +145,30 @@ func saveStates(states []StateInfo) error {
 	return os.WriteFile(stateJSONPath, data, 0644)
 }
 
+func updateMainMsgID(chatID int64, msgID int) {
+	states, _ := loadStates()
+	for i := range states {
+		if states[i].ChatID == chatID {
+			states[i].MainMsgID = msgID
+			saveStates(states)
+			return
+		}
+	}
+	states = append(states, StateInfo{ChatID: chatID, MainMsgID: msgID, State: "start"})
+	saveStates(states)
+}
+
+func getMainMsgID(chatID int64) int {
+	states, _ := loadStates()
+	for i := range states {
+		if states[i].ChatID == chatID {
+			return states[i].MainMsgID
+		}
+	}
+	return 0
+}
+
+// ========== HELPERS ==========
 func escapeHTML(text string) string {
 	if text == "" {
 		return ""
@@ -152,31 +182,29 @@ func escapeHTML(text string) string {
 }
 
 func escapeMarkdown(text string) string {
-    if text == "" {
-        return ""
-    }
-    // Экранируем только спецсимволы Markdown, но НЕ точки
-    replacer := strings.NewReplacer(
-        "_", "\\_",
-        "*", "\\*",
-        "[", "\\[",
-        "]", "\\]",
-        "(", "\\(",
-        ")", "\\)",
-        "~", "\\~",
-        "`", "\\`",
-        ">", "\\>",
-        "#", "\\#",
-        "+", "\\+",
-        "-", "\\-",
-        "=", "\\=",
-        "|", "\\|",
-        "{", "\\{",
-        "}", "\\}",
-        "!", "\\!",
-        // "." , "\\",   // ТОЧКИ НЕ ЭКРАНИРУЕМ
-    )
-    return replacer.Replace(text)
+	if text == "" {
+		return ""
+	}
+	replacer := strings.NewReplacer(
+		"_", "\\_",
+		"*", "\\*",
+		"[", "\\[",
+		"]", "\\]",
+		"(", "\\(",
+		")", "\\)",
+		"~", "\\~",
+		"`", "\\`",
+		">", "\\>",
+		"#", "\\#",
+		"+", "\\+",
+		"-", "\\-",
+		"=", "\\=",
+		"|", "\\|",
+		"{", "\\{",
+		"}", "\\}",
+		"!", "\\!",
+	)
+	return replacer.Replace(text)
 }
 
 func generatePassword(telegramID int64) string {
@@ -220,229 +248,1098 @@ func autoCreateUser(telegramID int64) (string, error) {
 	return generatePassword(telegramID), nil
 }
 
-func getAdminKeyboard() tgbotapi.ReplyKeyboardMarkup {
-	return tgbotapi.NewReplyKeyboard(
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("🆕 Новый пользователь"),
-			tgbotapi.NewKeyboardButton("👥 Пользователи"),
+// ========== INLINE KEYBOARDS ==========
+func getMainMenuKeyboard() *tgbotapi.InlineKeyboardMarkup {
+	kb := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("🆕 Новый пользователь", "menu:new_user"),
+			tgbotapi.NewInlineKeyboardButtonData("👥 Пользователи", "menu:list_users"),
 		),
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("🗑 Удалить пользователя"),
-			tgbotapi.NewKeyboardButton("✏️ Редактировать пользователя"),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("➕ Добавить в белый список", "menu:add_whitelist"),
+			tgbotapi.NewInlineKeyboardButtonData("🗑 Удалить из белого списка", "menu:remove_whitelist"),
 		),
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("➕ Добавить в белый список"),
-			tgbotapi.NewKeyboardButton("🗑 Удалить из белого списка"),
-		),
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("📋 Белый список"),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("📋 Белый список", "menu:show_whitelist"),
 		),
 	)
+	return &kb
 }
 
-func getCancelKeyboard() tgbotapi.ReplyKeyboardMarkup {
-	return tgbotapi.NewReplyKeyboard(
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("❌ Отменить"),
+func getCancelInlineKeyboard() *tgbotapi.InlineKeyboardMarkup {
+	kb := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("❌ Отменить", "cancel"),
 		),
 	)
+	return &kb
 }
 
-func getGroupKeyboard() tgbotapi.ReplyKeyboardMarkup {
-	return tgbotapi.NewReplyKeyboard(
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("1️⃣ Группа 1"),
-			tgbotapi.NewKeyboardButton("2️⃣ Группа 2"),
+func getGroupInlineKeyboard() *tgbotapi.InlineKeyboardMarkup {
+	kb := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("1️⃣ Группа 1", "group:1"),
+			tgbotapi.NewInlineKeyboardButtonData("2️⃣ Группа 2", "group:2"),
 		),
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("❌ Отменить"),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("❌ Отменить", "cancel"),
 		),
 	)
+	return &kb
 }
 
-func getExpiresKeyboard() tgbotapi.ReplyKeyboardMarkup {
-	return tgbotapi.NewReplyKeyboard(
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("📆 6 месяцев"),
-			tgbotapi.NewKeyboardButton("📆 1 год"),
+func getExpiresInlineKeyboard() *tgbotapi.InlineKeyboardMarkup {
+	kb := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("📆 6 месяцев", "expires:6m"),
+			tgbotapi.NewInlineKeyboardButtonData("📆 1 год", "expires:1y"),
 		),
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("❌ Отменить"),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("❌ Отменить", "cancel"),
 		),
 	)
+	return &kb
 }
 
-func getCommentKeyboard() tgbotapi.ReplyKeyboardMarkup {
-	return tgbotapi.NewReplyKeyboard(
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("💬 Без комментария"),
+func getCommentInlineKeyboard() *tgbotapi.InlineKeyboardMarkup {
+	kb := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("💬 Без комментария", "comment:none"),
 		),
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("❌ Отменить"),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("❌ Отменить", "cancel"),
 		),
 	)
+	return &kb
 }
 
-func getEditKeyboard() tgbotapi.ReplyKeyboardMarkup {
-	return tgbotapi.NewReplyKeyboard(
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("🏷 Группа"),
-			tgbotapi.NewKeyboardButton("📅 Срок"),
+func getEditInlineKeyboard(userID string) *tgbotapi.InlineKeyboardMarkup {
+	kb := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("🏷 Группа", fmt.Sprintf("edit:group:%s", userID)),
+			tgbotapi.NewInlineKeyboardButtonData("📅 Срок", fmt.Sprintf("edit:expires:%s", userID)),
 		),
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("💬 Комментарий"),
-			tgbotapi.NewKeyboardButton("🔞 Adult"),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("💬 Комментарий", fmt.Sprintf("edit:comment:%s", userID)),
+			tgbotapi.NewInlineKeyboardButtonData("🔞 Adult", fmt.Sprintf("edit:adult:%s", userID)),
 		),
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("👑 Admin"),
-			tgbotapi.NewKeyboardButton("❌ Отменить"),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("👑 Admin", fmt.Sprintf("edit:admin:%s", userID)),
+			tgbotapi.NewInlineKeyboardButtonData("❌ Отменить", "cancel"),
 		),
 	)
+	return &kb
 }
 
-func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery) {
-	parts := strings.SplitN(callback.Data, ":", 2)
-	if len(parts) != 2 {
+// ========== MAIN MENU ==========
+func updateMainMenu(chatID int64, bot *tgbotapi.BotAPI, messageID int) {
+	telegramID := chatID
+
+	code, err := db.GenerateAndSaveCodeIntoDb(telegramID)
+	if err != nil {
+		log.Println("Ошибка получения кода:", err)
+		code = "ошибка"
+	}
+
+	text := fmt.Sprintf(
+		"👋 *Администратор*\n\n📌 *Ваш Telegram ID:* `%d`\n🔑 *Ваш пароль для входа:* `%d`\n🔑 *Ваш код для синхронизации:* `%s`\n\nВведите в настройках аккаунта Lampa.",
+		telegramID, telegramID, code,
+	)
+
+	editMsg := tgbotapi.NewEditMessageText(chatID, messageID, text)
+	editMsg.ParseMode = "Markdown"
+	editMsg.ReplyMarkup = getMainMenuKeyboard()
+	sentMsg, _ := bot.Send(editMsg)
+	
+	updateMainMsgID(chatID, sentMsg.MessageID)
+}
+
+// ========== USER LIST ==========
+func handleListUsers(chatID int64, bot *tgbotapi.BotAPI, messageID int) {
+	users, err := loadUsers()
+	if err != nil || len(users) == 0 {
+		editMsg := tgbotapi.NewEditMessageText(chatID, messageID, "📭 Список пользователей пуст")
+		editMsg.ParseMode = "Markdown"
+		sentMsg, _ := bot.Send(editMsg)
+		updateMainMsgID(chatID, sentMsg.MessageID)
 		return
 	}
 
-	action := parts[0]
-	userID := parts[1]
-
-	switch action {
-	case "whitelist_remove":
-		id, err := strconv.ParseInt(userID, 10, 64)
-		if err != nil {
-			bot.Send(tgbotapi.NewMessage(callback.Message.Chat.ID, "❌ Ошибка: неверный ID"))
-			return
-		}
-
-		if allowedUserIDs[id] {
-			delete(allowedUserIDs, id)
-			saveWhitelist()
-			msg := tgbotapi.NewMessage(callback.Message.Chat.ID, fmt.Sprintf("✅ Пользователь `%d` удалён из белого списка", id))
-			msg.ParseMode = "Markdown"
-			bot.Send(msg)
-		} else {
-			bot.Send(tgbotapi.NewMessage(callback.Message.Chat.ID, "⚠️ Пользователь не найден в белом списке"))
-		}
-		bot.Send(tgbotapi.NewDeleteMessage(callback.Message.Chat.ID, callback.Message.MessageID))
-		return
+	var rows [][]tgbotapi.InlineKeyboardButton
+	for _, user := range users {
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(fmt.Sprintf("👤 %s", escapeMarkdown(user.ID)), fmt.Sprintf("select_user:%s", user.ID)),
+		))
 	}
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+		tgbotapi.NewInlineKeyboardButtonData("◀️ Назад в меню", "back_to_menu"),
+	))
 
+	text := "📋 *Список пользователей*\n\nВыберите пользователя для просмотра и управления:"
+	editMsg := tgbotapi.NewEditMessageText(chatID, messageID, text)
+	editMsg.ParseMode = "Markdown"
+	kb := tgbotapi.NewInlineKeyboardMarkup(rows...)
+	editMsg.ReplyMarkup = &kb
+	sentMsg, _ := bot.Send(editMsg)
+	updateMainMsgID(chatID, sentMsg.MessageID)
+}
+
+// ========== USER DETAIL ==========
+func handleUserDetail(chatID int64, bot *tgbotapi.BotAPI, userID string, messageID int) {
 	users, err := loadUsers()
 	if err != nil {
 		return
 	}
 
-	var userIndex int = -1
-	for i, u := range users {
-		if u.ID == userID {
-			userIndex = i
+	var user *User
+	for i := range users {
+		if users[i].ID == userID {
+			user = &users[i]
 			break
 		}
 	}
-
-	if userIndex == -1 {
-		bot.Send(tgbotapi.NewMessage(callback.Message.Chat.ID, "⚠️ Пользователь не найден"))
+	if user == nil {
+		editMsg := tgbotapi.NewEditMessageText(chatID, messageID, "⚠️ Пользователь не найден")
+		editMsg.ParseMode = "Markdown"
+		sentMsg, _ := bot.Send(editMsg)
+		updateMainMsgID(chatID, sentMsg.MessageID)
 		return
 	}
 
-	switch action {
-	case "delete":
-		users = append(users[:userIndex], users[userIndex+1:]...)
-		saveUsers(users)
+	expiresDate := user.Expires.Format("02.01.2006")
+	syncCode := "❌ нет"
+	userIDint, err := strconv.ParseInt(user.ID, 10, 64)
+	if err == nil && userIDint > 0 {
+		code, err := db.GenerateAndSaveCodeIntoDb(userIDint)
+		if err == nil && code != "" {
+			syncCode = code
+		}
+	}
 
-                // Удаляем запись из data.db по chat_id (userID)
-                err := db.RemoveUserFromDbByChatID(userID)
-                if err != nil {
-                    log.Printf("⚠️ Ошибка удаления из data.db: %v", err)
-                }
+	text := fmt.Sprintf(
+		"👤 *%s*\n🏷 Группа: `%d`\n📅 Доступ до: `%s`\n💬 Комментарий: `%s`\n🔞 Adult: %v | 👑 Admin: %v\n🔑 Пароль: `%s`\n🔑 Код: `%s`",
+		escapeMarkdown(user.ID), user.Group, expiresDate, escapeMarkdown(user.Comment),
+		user.Params.Adult, user.Params.Admin, escapeMarkdown(user.ID), syncCode,
+	)
 
-		bot.Send(tgbotapi.NewMessage(callback.Message.Chat.ID, fmt.Sprintf("✅ Пользователь %s удален", escapeMarkdown(userID))))
+	inlineKeyboard := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("✏️ Редактировать", fmt.Sprintf("edit_user:%s", user.ID)),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("🗑 Удалить", fmt.Sprintf("delete_user:%s", user.ID)),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("◀️ Назад к списку", "back_to_user_list"),
+		),
+	)
 
-	case "extend":
-		users[userIndex].Expires = users[userIndex].Expires.AddDate(0, 1, 0)
-		saveUsers(users)
-		bot.Send(tgbotapi.NewMessage(callback.Message.Chat.ID, fmt.Sprintf(
-			"✅ Доступ для %s продлен до %s",
-			escapeMarkdown(userID), users[userIndex].Expires.Format("02.01.2006"),
-		)))
+	editMsg := tgbotapi.NewEditMessageText(chatID, messageID, text)
+	editMsg.ParseMode = "Markdown"
+	editMsg.ReplyMarkup = &inlineKeyboard
+	sentMsg, _ := bot.Send(editMsg)
+	
+	states, _ := loadStates()
+	for i := range states {
+		if states[i].ChatID == chatID {
+			states[i].MainMsgID = sentMsg.MessageID
+			saveStates(states)
+			break
+		}
+	}
+}
 
-	case "edit":
+// ========== WHITELIST SHOW ==========
+func handleShowWhitelistInline(chatID int64, bot *tgbotapi.BotAPI, messageID int, callbackID string) {
+	if len(allowedUserIDs) == 0 {
+		callback := tgbotapi.NewCallback(callbackID, "📭 Белый список пуст")
+		bot.Send(callback)
+		return
+	}
+
+	var text string = "📋 *Белый список Telegram ID:*\n"
+	for id := range allowedUserIDs {
+		text += fmt.Sprintf("• `%d`\n", id)
+	}
+
+	inlineKeyboard := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("◀️ Назад в меню", "back_to_menu"),
+		),
+	)
+
+	editMsg := tgbotapi.NewEditMessageText(chatID, messageID, text)
+	editMsg.ParseMode = "Markdown"
+	editMsg.ReplyMarkup = &inlineKeyboard
+	sentMsg, _ := bot.Send(editMsg)
+	updateMainMsgID(chatID, sentMsg.MessageID)
+}
+
+// ========== CALLBACK QUERY ==========
+func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery) {
+	log.Printf("🔔 ПОЛУЧЕН CALLBACK: %s", callback.Data)
+
+	chatID := callback.Message.Chat.ID
+	msgID := callback.Message.MessageID
+	data := callback.Data
+
+	if data == "cancel" {
+		states, _ := loadStates()
+		var currentState *StateInfo
+		for i := range states {
+			if states[i].ChatID == chatID {
+				currentState = &states[i]
+				break
+			}
+		}
+
+		if currentState != nil && currentState.State == "edit_menu" {
+			handleUserDetail(chatID, bot, currentState.EditUserID, msgID)
+			currentState.State = "start"
+			currentState.EditUserID = ""
+			currentState.MainMsgID = 0
+			saveStates(states)
+			return
+		}
+
+		if currentState != nil && (currentState.State == "edit_wait_group" ||
+			currentState.State == "edit_wait_expires" ||
+			currentState.State == "edit_wait_comment") {
+			handleUserDetail(chatID, bot, currentState.EditUserID, msgID)
+			currentState.State = "start"
+			currentState.TempMsgID = 0
+			currentState.MainMsgID = 0
+			saveStates(states)
+			return
+		}
+
+		if currentState != nil && currentState.State == "add_whitelist" {
+			telegramID := chatID
+			code, err := db.GenerateAndSaveCodeIntoDb(telegramID)
+			if err != nil {
+				log.Println("Ошибка получения кода:", err)
+				code = "ошибка"
+			}
+			text := fmt.Sprintf(
+				"👋 *Администратор*\n\n📌 *Ваш Telegram ID:* `%d`\n🔑 *Ваш пароль для входа:* `%d`\n🔑 *Ваш код для синхронизации:* `%s`\n\nВведите в настройках аккаунта Lampa.",
+				telegramID, telegramID, code,
+			)
+			editMsg := tgbotapi.NewEditMessageText(chatID, msgID, text)
+			editMsg.ParseMode = "Markdown"
+			editMsg.ReplyMarkup = getMainMenuKeyboard()
+			sentMsg, _ := bot.Send(editMsg)
+			updateMainMsgID(chatID, sentMsg.MessageID)
+			currentState.State = "start"
+			currentState.TempUser = nil
+			saveStates(states)
+			return
+		}
+
+		updateMainMenu(chatID, bot, msgID)
+		return
+	}
+
+	if data == "back_to_menu" {
+		updateMainMenu(chatID, bot, msgID)
+		return
+	}
+
+	if data == "back_to_user_list" {
+		handleListUsers(chatID, bot, msgID)
+		return
+	}
+
+	if data == "comment:none" {
+		states, _ := loadStates()
+		var currentState *StateInfo
+		for i := range states {
+			if states[i].ChatID == chatID {
+				currentState = &states[i]
+				break
+			}
+		}
+
+		if currentState != nil && currentState.TempUser != nil && currentState.State == "newUser_comment" {
+			bot.Send(tgbotapi.NewDeleteMessage(chatID, msgID))
+
+			currentState.TempUser.Comment = ""
+
+			users, _ := loadUsers()
+			users = append(users, *currentState.TempUser)
+			saveUsers(users)
+
+			userIDint, err := strconv.ParseInt(currentState.TempUser.ID, 10, 64)
+			var syncCode string
+			if err == nil && userIDint > 0 {
+				code, err := db.GenerateAndSaveCodeIntoDb(userIDint)
+				if err == nil {
+					syncCode = code
+				}
+			}
+
+			resultText := fmt.Sprintf("✅ *Пользователь добавлен!*\n🆔 ID: `%s`\n🏷 Группа: `%d`\n📅 Доступ до: `%s`\n💬 Комментарий: `%s`\n🔑 Пароль: `%s`\n🔑 Код синхронизации: `%s`",
+				escapeMarkdown(currentState.TempUser.ID), currentState.TempUser.Group,
+				currentState.TempUser.Expires.Format("02.01.2006"), "",
+				escapeMarkdown(currentState.TempUser.ID), syncCode)
+
+			inlineKeyboard := tgbotapi.NewInlineKeyboardMarkup(
+				tgbotapi.NewInlineKeyboardRow(
+					tgbotapi.NewInlineKeyboardButtonData("✏️ Редактировать", fmt.Sprintf("edit_user:%s", currentState.TempUser.ID)),
+				),
+				tgbotapi.NewInlineKeyboardRow(
+					tgbotapi.NewInlineKeyboardButtonData("🗑 Удалить", fmt.Sprintf("delete_user:%s", currentState.TempUser.ID)),
+				),
+				tgbotapi.NewInlineKeyboardRow(
+					tgbotapi.NewInlineKeyboardButtonData("◀️ Назад к списку", "back_to_user_list"),
+				),
+			)
+
+			newMsg := tgbotapi.NewMessage(chatID, resultText)
+			newMsg.ParseMode = "Markdown"
+			newMsg.ReplyMarkup = &inlineKeyboard
+			sentMsg, _ := bot.Send(newMsg)
+
+			for i := range states {
+				if states[i].ChatID == chatID {
+					states[i].MainMsgID = sentMsg.MessageID
+					break
+				}
+			}
+
+			currentState.TempUser = nil
+			currentState.State = "start"
+			saveStates(states)
+			return
+		}
+
+		if currentState != nil && currentState.State == "edit_wait_comment" {
+			users, _ := loadUsers()
+			for i := range users {
+				if users[i].ID == currentState.EditUserID {
+					users[i].Comment = ""
+					saveUsers(users)
+					break
+				}
+			}
+
+			handleUserDetail(chatID, bot, currentState.EditUserID, msgID)
+
+			currentState.State = "start"
+			currentState.TempMsgID = 0
+			saveStates(states)
+		}
+		return
+	}
+
+	if strings.HasPrefix(data, "menu:") {
+		action := strings.TrimPrefix(data, "menu:")
+		switch action {
+		case "new_user":
+			handleNewUserStart(chatID, bot, msgID)
+		case "list_users":
+			handleListUsers(chatID, bot, msgID)
+		case "add_whitelist":
+			handleAddWhitelistStart(chatID, bot, msgID)
+		case "remove_whitelist":
+			handleRemoveWhitelistStart(chatID, bot, msgID, callback.ID)
+		case "show_whitelist":
+			handleShowWhitelistInline(chatID, bot, msgID, callback.ID)
+		}
+		return
+	}
+
+	if strings.HasPrefix(data, "select_user:") {
+		userID := strings.TrimPrefix(data, "select_user:")
+		handleUserDetail(chatID, bot, userID, msgID)
+		return
+	}
+
+	if strings.HasPrefix(data, "delete_user:") {
+		userID := strings.TrimPrefix(data, "delete_user:")
+		showDeleteConfirmation(chatID, bot, msgID, userID)
+		return
+	}
+
+	if strings.HasPrefix(data, "confirm_delete:") {
+		userID := strings.TrimPrefix(data, "confirm_delete:")
+		confirmDeleteUser(chatID, bot, msgID, userID)
+		return
+	}
+
+	if strings.HasPrefix(data, "edit_user:") {
+		userID := strings.TrimPrefix(data, "edit_user:")
+		startEditUser(chatID, bot, msgID, userID)
+		return
+	}
+
+	if strings.HasPrefix(data, "whitelist_remove:") {
+		idStr := strings.TrimPrefix(data, "whitelist_remove:")
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err == nil {
+			delete(allowedUserIDs, id)
+			saveWhitelist()
+
+			notifyMsg, _ := bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("✅ Пользователь %d удалён из белого списка", id)))
+
+			time.AfterFunc(3*time.Second, func() {
+				bot.Send(tgbotapi.NewDeleteMessage(chatID, notifyMsg.MessageID))
+			})
+		}
+		updateMainMenu(chatID, bot, msgID)
+		return
+	}
+
+	if strings.HasPrefix(data, "group:") {
+		groupStr := strings.TrimPrefix(data, "group:")
+		var group int
+		if groupStr == "1" {
+			group = 1
+		} else if groupStr == "2" {
+			group = 2
+		} else {
+			group, _ = strconv.Atoi(groupStr)
+		}
+		states, _ := loadStates()
+		for i := range states {
+			if states[i].ChatID == chatID {
+				if states[i].TempUser != nil {
+					states[i].TempUser.Group = group
+					states[i].State = "newUser_expires"
+					saveStates(states)
+				}
+				break
+			}
+		}
+		showExpiresInput(chatID, bot, msgID)
+		return
+	}
+
+	if strings.HasPrefix(data, "expires:") {
+		expiresOption := strings.TrimPrefix(data, "expires:")
+		var expires time.Time
+		if expiresOption == "6m" {
+			expires = time.Now().AddDate(0, 6, 0)
+		} else if expiresOption == "1y" {
+			expires = time.Now().AddDate(1, 0, 0)
+		}
+		states, _ := loadStates()
+		var currentState *StateInfo
+		for i := range states {
+			if states[i].ChatID == chatID {
+				currentState = &states[i]
+				break
+			}
+		}
+
+		if currentState != nil && currentState.State == "edit_wait_expires" {
+			users, _ := loadUsers()
+			for i := range users {
+				if users[i].ID == currentState.EditUserID {
+					users[i].Expires = expires
+					saveUsers(users)
+					break
+				}
+			}
+
+			handleUserDetail(chatID, bot, currentState.EditUserID, msgID)
+
+			currentState.State = "start"
+			currentState.TempMsgID = 0
+			saveStates(states)
+			return
+		}
+
+		states, _ = loadStates()
+		for i := range states {
+			if states[i].ChatID == chatID && states[i].TempUser != nil {
+				states[i].TempUser.Expires = expires
+				states[i].State = "newUser_comment"
+				saveStates(states)
+				break
+			}
+		}
+
+		showCommentInput(chatID, bot, msgID)
+		return
+	}
+
+	if strings.HasPrefix(data, "comment:") && data != "comment:none" {
+		comment := strings.TrimPrefix(data, "comment:")
+		states, _ := loadStates()
+		var tempUser *User
+		for i := range states {
+			if states[i].ChatID == chatID {
+				tempUser = states[i].TempUser
+				break
+			}
+		}
+		if tempUser != nil {
+			if comment != "none" {
+				tempUser.Comment = comment
+			}
+			users, _ := loadUsers()
+			users = append(users, *tempUser)
+			saveUsers(users)
+
+			userIDint, err := strconv.ParseInt(tempUser.ID, 10, 64)
+			var syncCode string
+			if err == nil && userIDint > 0 {
+				code, err := db.GenerateAndSaveCodeIntoDb(userIDint)
+				if err == nil {
+					syncCode = code
+				}
+			}
+
+			for i := range states {
+				if states[i].ChatID == chatID {
+					states[i].TempUser = nil
+					states[i].State = "start"
+					break
+				}
+			}
+			saveStates(states)
+
+			text := fmt.Sprintf("✅ *Пользователь добавлен!*\n🆔 ID: `%s`\n🏷 Группа: `%d`\n📅 Доступ до: `%s`\n💬 Комментарий: `%s`\n🔑 Пароль: `%s`\n🔑 Код синхронизации: `%s`",
+				escapeMarkdown(tempUser.ID), tempUser.Group, tempUser.Expires.Format("02.01.2006"),
+				escapeMarkdown(tempUser.Comment), escapeMarkdown(tempUser.ID), syncCode)
+			editMsg := tgbotapi.NewEditMessageText(chatID, msgID, text)
+			editMsg.ParseMode = "Markdown"
+			backKb := tgbotapi.NewInlineKeyboardMarkup(
+				tgbotapi.NewInlineKeyboardRow(
+					tgbotapi.NewInlineKeyboardButtonData("◀️ Назад в меню", "back_to_menu"),
+				),
+			)
+			editMsg.ReplyMarkup = &backKb
+			sentMsg, _ := bot.Send(editMsg)
+			updateMainMsgID(chatID, sentMsg.MessageID)
+		}
+		return
+	}
+
+	if strings.HasPrefix(data, "edit:group:") {
+		userID := strings.TrimPrefix(data, "edit:group:")
+		text := fmt.Sprintf("✏️ *Введите новую группу (0-10) для пользователя %s:*", escapeMarkdown(userID))
+		editMsg := tgbotapi.NewEditMessageText(chatID, msgID, text)
+		editMsg.ParseMode = "Markdown"
+		editMsg.ReplyMarkup = getCancelInlineKeyboard()
+		sentMsg, _ := bot.Send(editMsg)
+
 		states, _ := loadStates()
 		var stateInfo *StateInfo
 		for i := range states {
-			if states[i].ChatID == callback.Message.Chat.ID {
+			if states[i].ChatID == chatID {
 				stateInfo = &states[i]
 				break
 			}
 		}
 		if stateInfo == nil {
-			stateInfo = &StateInfo{ChatID: callback.Message.Chat.ID, State: "edit_menu"}
+			stateInfo = &StateInfo{ChatID: chatID, State: "edit_wait_group", EditUserID: userID, TempMsgID: sentMsg.MessageID, MainMsgID: msgID}
 			states = append(states, *stateInfo)
+		} else {
+			stateInfo.State = "edit_wait_group"
+			stateInfo.EditUserID = userID
+			stateInfo.TempMsgID = sentMsg.MessageID
+			stateInfo.MainMsgID = msgID
 		}
-		stateInfo.State = "edit_menu"
-		stateInfo.EditUserID = userID
 		saveStates(states)
-
-		user := &users[userIndex]
-		msg := tgbotapi.NewMessage(callback.Message.Chat.ID, fmt.Sprintf(
-			"✏️ *Редактирование пользователя %s*\n\n"+
-				"🏷 Группа: %d\n"+
-				"📅 Срок: %s\n"+
-				"💬 Комментарий: %s\n"+
-				"🔞 Adult: %v\n"+
-				"👑 Admin: %v\n\n"+
-				"Выберите что изменить:",
-			escapeMarkdown(user.ID), user.Group, user.Expires.Format("02.01.2006"),
-			escapeMarkdown(user.Comment), user.Params.Adult, user.Params.Admin,
-		))
-		msg.ParseMode = "Markdown"
-		msg.ReplyMarkup = getEditKeyboard()
-		bot.Send(msg)
+		return
 	}
 
-	bot.Send(tgbotapi.NewDeleteMessage(callback.Message.Chat.ID, callback.Message.MessageID))
+	if strings.HasPrefix(data, "edit:expires:") {
+		userID := strings.TrimPrefix(data, "edit:expires:")
+		text := fmt.Sprintf("✏️ *Введите новую дату (ДД.ММ.ГГГГ) для пользователя %s:*", escapeMarkdown(userID))
+		editMsg := tgbotapi.NewEditMessageText(chatID, msgID, text)
+		editMsg.ParseMode = "Markdown"
+		editMsg.ReplyMarkup = getExpiresInlineKeyboard()
+		sentMsg, _ := bot.Send(editMsg)
+
+		states, _ := loadStates()
+		var stateInfo *StateInfo
+		for i := range states {
+			if states[i].ChatID == chatID {
+				stateInfo = &states[i]
+				break
+			}
+		}
+		if stateInfo == nil {
+			stateInfo = &StateInfo{ChatID: chatID, State: "edit_wait_expires", EditUserID: userID, TempMsgID: sentMsg.MessageID, MainMsgID: msgID}
+			states = append(states, *stateInfo)
+		} else {
+			stateInfo.State = "edit_wait_expires"
+			stateInfo.EditUserID = userID
+			stateInfo.TempMsgID = sentMsg.MessageID
+			stateInfo.MainMsgID = msgID
+		}
+		saveStates(states)
+		return
+	}
+
+	if strings.HasPrefix(data, "edit:comment:") {
+		userID := strings.TrimPrefix(data, "edit:comment:")
+		text := fmt.Sprintf("✏️ *Введите новый комментарий для пользователя %s:*", escapeMarkdown(userID))
+		editMsg := tgbotapi.NewEditMessageText(chatID, msgID, text)
+		editMsg.ParseMode = "Markdown"
+		editMsg.ReplyMarkup = getCommentInlineKeyboard()
+		sentMsg, _ := bot.Send(editMsg)
+
+		states, _ := loadStates()
+		var stateInfo *StateInfo
+		for i := range states {
+			if states[i].ChatID == chatID {
+				stateInfo = &states[i]
+				break
+			}
+		}
+		if stateInfo == nil {
+			stateInfo = &StateInfo{ChatID: chatID, State: "edit_wait_comment", EditUserID: userID, TempMsgID: sentMsg.MessageID, MainMsgID: msgID}
+			states = append(states, *stateInfo)
+		} else {
+			stateInfo.State = "edit_wait_comment"
+			stateInfo.EditUserID = userID
+			stateInfo.TempMsgID = sentMsg.MessageID
+			stateInfo.MainMsgID = msgID
+		}
+		saveStates(states)
+		return
+	}
+
+	if strings.HasPrefix(data, "edit:adult:") {
+		userID := strings.TrimPrefix(data, "edit:adult:")
+		users, _ := loadUsers()
+		for i := range users {
+			if users[i].ID == userID {
+				users[i].Params.Adult = !users[i].Params.Adult
+				saveUsers(users)
+				break
+			}
+		}
+		handleUserDetail(chatID, bot, userID, msgID)
+		return
+	}
+
+	if strings.HasPrefix(data, "edit:admin:") {
+		userID := strings.TrimPrefix(data, "edit:admin:")
+		users, _ := loadUsers()
+		for i := range users {
+			if users[i].ID == userID {
+				users[i].Params.Admin = !users[i].Params.Admin
+				saveUsers(users)
+				break
+			}
+		}
+		handleUserDetail(chatID, bot, userID, msgID)
+		return
+	}
 }
 
-func handleAdminMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
+// ========== CREATE USER FLOW ==========
+func handleNewUserStart(chatID int64, bot *tgbotapi.BotAPI, messageID int) {
+	states, _ := loadStates()
+	var stateInfo *StateInfo
+	for i := range states {
+		if states[i].ChatID == chatID {
+			stateInfo = &states[i]
+			break
+		}
+	}
+	if stateInfo == nil {
+		stateInfo = &StateInfo{ChatID: chatID, State: "newUser_id"}
+		states = append(states, *stateInfo)
+	} else {
+		stateInfo.State = "newUser_id"
+		stateInfo.TempUser = nil
+	}
+	saveStates(states)
+
+	text := "📝 *Введите ID нового пользователя:*\n• Не менее 6 символов\n• Только цифры"
+	editMsg := tgbotapi.NewEditMessageText(chatID, messageID, text)
+	editMsg.ParseMode = "Markdown"
+	editMsg.ReplyMarkup = getCancelInlineKeyboard()
+	sentMsg, _ := bot.Send(editMsg)
+	updateMainMsgID(chatID, sentMsg.MessageID)
+}
+
+func showGroupInput(chatID int64, bot *tgbotapi.BotAPI, messageID int) {
+	text := "🔢 *Введите группу (0-10)* или нажмите кнопку:"
+	editMsg := tgbotapi.NewEditMessageText(chatID, messageID, text)
+	editMsg.ParseMode = "Markdown"
+	editMsg.ReplyMarkup = getGroupInlineKeyboard()
+	sentMsg, _ := bot.Send(editMsg)
+	updateMainMsgID(chatID, sentMsg.MessageID)
+}
+
+func showExpiresInput(chatID int64, bot *tgbotapi.BotAPI, messageID int) {
+	text := "📅 *Введите дату (ДД.ММ.ГГГГ)* или выберите срок:"
+	editMsg := tgbotapi.NewEditMessageText(chatID, messageID, text)
+	editMsg.ParseMode = "Markdown"
+	editMsg.ReplyMarkup = getExpiresInlineKeyboard()
+	sentMsg, _ := bot.Send(editMsg)
+	updateMainMsgID(chatID, sentMsg.MessageID)
+}
+
+func showCommentInput(chatID int64, bot *tgbotapi.BotAPI, messageID int) {
+	text := "💬 *Введите комментарий* или нажмите 'Без комментария':"
+	editMsg := tgbotapi.NewEditMessageText(chatID, messageID, text)
+	editMsg.ParseMode = "Markdown"
+	editMsg.ReplyMarkup = getCommentInlineKeyboard()
+	sentMsg, _ := bot.Send(editMsg)
+	updateMainMsgID(chatID, sentMsg.MessageID)
+}
+
+// ========== DELETE USER ==========
+func showDeleteConfirmation(chatID int64, bot *tgbotapi.BotAPI, messageID int, userID string) {
+	text := fmt.Sprintf("⚠️ *Вы уверены, что хотите удалить пользователя %s?*\nЭто действие необратимо.", escapeMarkdown(userID))
+	inlineKeyboard := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("✅ Да, удалить", fmt.Sprintf("confirm_delete:%s", userID)),
+			tgbotapi.NewInlineKeyboardButtonData("❌ Нет, отмена", "cancel"),
+		),
+	)
+	editMsg := tgbotapi.NewEditMessageText(chatID, messageID, text)
+	editMsg.ParseMode = "Markdown"
+	editMsg.ReplyMarkup = &inlineKeyboard
+	sentMsg, _ := bot.Send(editMsg)
+	updateMainMsgID(chatID, sentMsg.MessageID)
+}
+
+func confirmDeleteUser(chatID int64, bot *tgbotapi.BotAPI, messageID int, userID string) {
+	users, _ := loadUsers()
+	newUsers := []User{}
+	for _, u := range users {
+		if u.ID != userID {
+			newUsers = append(newUsers, u)
+		}
+	}
+	saveUsers(newUsers)
+
+	err := db.RemoveUserFromDbByChatID(userID)
+	if err != nil {
+		log.Printf("⚠️ Ошибка удаления из data.db: %v", err)
+	}
+
+	text := fmt.Sprintf("✅ Пользователь %s удален", escapeMarkdown(userID))
+	editMsg := tgbotapi.NewEditMessageText(chatID, messageID, text)
+	editMsg.ParseMode = "Markdown"
+	backKb := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("◀️ Назад в меню", "back_to_menu"),
+		),
+	)
+	editMsg.ReplyMarkup = &backKb
+	sentMsg, _ := bot.Send(editMsg)
+	updateMainMsgID(chatID, sentMsg.MessageID)
+}
+
+// ========== EDIT USER ==========
+func startEditUser(chatID int64, bot *tgbotapi.BotAPI, messageID int, userID string) {
+	text := fmt.Sprintf("✏️ *Редактирование пользователя %s*\n\nВыберите что изменить:", escapeMarkdown(userID))
+
+	var sentMsg tgbotapi.Message
+	if messageID != 0 {
+		editMsg := tgbotapi.NewEditMessageText(chatID, messageID, text)
+		editMsg.ParseMode = "Markdown"
+		editMsg.ReplyMarkup = getEditInlineKeyboard(userID)
+		sentMsg, _ = bot.Send(editMsg)
+	} else {
+		msg := tgbotapi.NewMessage(chatID, text)
+		msg.ParseMode = "Markdown"
+		msg.ReplyMarkup = getEditInlineKeyboard(userID)
+		sentMsg, _ = bot.Send(msg)
+	}
+
+	states, _ := loadStates()
+	var stateInfo *StateInfo
+	for i := range states {
+		if states[i].ChatID == chatID {
+			stateInfo = &states[i]
+			break
+		}
+	}
+	if stateInfo == nil {
+		stateInfo = &StateInfo{ChatID: chatID, State: "edit_menu", EditUserID: userID, MainMsgID: sentMsg.MessageID}
+		states = append(states, *stateInfo)
+	} else {
+		stateInfo.State = "edit_menu"
+		stateInfo.EditUserID = userID
+		stateInfo.MainMsgID = sentMsg.MessageID
+	}
+	saveStates(states)
+}
+
+// ========== WHITELIST ==========
+func handleAddWhitelistStart(chatID int64, bot *tgbotapi.BotAPI, messageID int) {
+	text := "📝 *Введите Telegram ID пользователя для добавления в белый список:*\n\nПример: `123456789`"
+	editMsg := tgbotapi.NewEditMessageText(chatID, messageID, text)
+	editMsg.ParseMode = "Markdown"
+	editMsg.ReplyMarkup = getCancelInlineKeyboard()
+	sentMsg, _ := bot.Send(editMsg)
+	updateMainMsgID(chatID, sentMsg.MessageID)
+
+	states, _ := loadStates()
+	var stateInfo *StateInfo
+	for i := range states {
+		if states[i].ChatID == chatID {
+			stateInfo = &states[i]
+			break
+		}
+	}
+	if stateInfo == nil {
+		stateInfo = &StateInfo{ChatID: chatID, State: "add_whitelist"}
+		states = append(states, *stateInfo)
+	} else {
+		stateInfo.State = "add_whitelist"
+	}
+	saveStates(states)
+}
+
+func handleRemoveWhitelistStart(chatID int64, bot *tgbotapi.BotAPI, messageID int, callbackID string) {
+	if len(allowedUserIDs) == 0 {
+		callback := tgbotapi.NewCallback(callbackID, "📭 Белый список пуст")
+		bot.Send(callback)
+		return
+	}
+
+	var rows [][]tgbotapi.InlineKeyboardButton
+	for id := range allowedUserIDs {
+		if isAdmin(id) {
+			continue
+		}
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(fmt.Sprintf("🗑 %d", id), fmt.Sprintf("whitelist_remove:%d", id)),
+		))
+	}
+	if len(rows) == 0 {
+		text := "📭 В белом списке только администратор, удалять некого"
+		editMsg := tgbotapi.NewEditMessageText(chatID, messageID, text)
+		editMsg.ParseMode = "Markdown"
+		backKb := tgbotapi.NewInlineKeyboardMarkup(
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("◀️ Назад в меню", "back_to_menu"),
+			),
+		)
+		editMsg.ReplyMarkup = &backKb
+		sentMsg, _ := bot.Send(editMsg)
+		updateMainMsgID(chatID, sentMsg.MessageID)
+		return
+	}
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+		tgbotapi.NewInlineKeyboardButtonData("◀️ Назад в меню", "back_to_menu"),
+	))
+
+	text := "🗑 *Выберите пользователя для удаления из белого списка:*"
+	editMsg := tgbotapi.NewEditMessageText(chatID, messageID, text)
+	editMsg.ParseMode = "Markdown"
+	kb := tgbotapi.NewInlineKeyboardMarkup(rows...)
+	editMsg.ReplyMarkup = &kb
+	sentMsg, _ := bot.Send(editMsg)
+	updateMainMsgID(chatID, sentMsg.MessageID)
+}
+
+// ========== MESSAGE HANDLERS ==========
+func handleAdminMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message, messageID int) {
 	chatID := msg.Chat.ID
-        log.Printf("📩 handleAdminMessage: %s от %d", msg.Text, chatID)
+	text := msg.Text
 
 	states, _ := loadStates()
 	var currentState *StateInfo
 	for i := range states {
 		if states[i].ChatID == chatID {
 			currentState = &states[i]
-                        log.Printf("📌 Текущее состояние: %s", currentState.State)
 			break
 		}
 	}
 	if currentState == nil {
 		currentState = &StateInfo{ChatID: chatID, State: "start"}
 		states = append(states, *currentState)
-                log.Printf("📌 Создано новое состояние: start")
+		saveStates(states)
 	}
 
-	// Обработка редактирования группы
-	if currentState.State == "edit_group" {
-		if msg.Text == "❌ Отменить" {
-			currentState.State = "edit_menu"
-			saveStates(states)
-			reply := tgbotapi.NewMessage(chatID, "✏️ Редактирование отменено")
-			reply.ReplyMarkup = getEditKeyboard()
-			bot.Send(reply)
+	if messageID == 0 {
+		messageID = getMainMsgID(chatID)
+	}
+
+	switch currentState.State {
+	case "newUser_id":
+		userID := strings.ToLower(text)
+		if !regexp.MustCompile(`^\d+$`).MatchString(userID) {
+			editMsg := tgbotapi.NewEditMessageText(chatID, messageID, "⚠️ ID должен содержать только цифры.")
+			editMsg.ParseMode = "Markdown"
+			editMsg.ReplyMarkup = getCancelInlineKeyboard()
+			sentMsg, _ := bot.Send(editMsg)
+			updateMainMsgID(chatID, sentMsg.MessageID)
+			bot.Send(tgbotapi.NewDeleteMessage(chatID, msg.MessageID))
+			return
+		}
+		if len(userID) < 6 {
+			editMsg := tgbotapi.NewEditMessageText(chatID, messageID, "⚠️ ID должен быть не короче 6 символов")
+			editMsg.ParseMode = "Markdown"
+			editMsg.ReplyMarkup = getCancelInlineKeyboard()
+			sentMsg, _ := bot.Send(editMsg)
+			updateMainMsgID(chatID, sentMsg.MessageID)
+			bot.Send(tgbotapi.NewDeleteMessage(chatID, msg.MessageID))
+			return
+		}
+		users, _ := loadUsers()
+		for _, u := range users {
+			if u.ID == userID {
+				editMsg := tgbotapi.NewEditMessageText(chatID, messageID, fmt.Sprintf("⚠️ ID %s уже существует", userID))
+				editMsg.ParseMode = "Markdown"
+				editMsg.ReplyMarkup = getCancelInlineKeyboard()
+				sentMsg, _ := bot.Send(editMsg)
+				updateMainMsgID(chatID, sentMsg.MessageID)
+				bot.Send(tgbotapi.NewDeleteMessage(chatID, msg.MessageID))
+				return
+			}
+		}
+
+		// Удаляем сообщение пользователя с введенным ID
+		bot.Send(tgbotapi.NewDeleteMessage(chatID, msg.MessageID))
+
+		currentState.TempUser = &User{ID: userID}
+		currentState.State = "newUser_group"
+		saveStates(states)
+		showGroupInput(chatID, bot, messageID)
+
+	case "newUser_group":
+		group, err := strconv.Atoi(text)
+		if err != nil || group < 0 || group > 10 {
+			editMsg := tgbotapi.NewEditMessageText(chatID, messageID, "⚠️ Введите число от 0 до 10")
+			editMsg.ParseMode = "Markdown"
+			editMsg.ReplyMarkup = getGroupInlineKeyboard()
+			sentMsg, _ := bot.Send(editMsg)
+			updateMainMsgID(chatID, sentMsg.MessageID)
+			bot.Send(tgbotapi.NewDeleteMessage(chatID, msg.MessageID))
 			return
 		}
 
-		group, err := strconv.Atoi(msg.Text)
-		if err != nil || group < 0 || group > 10 {
-			reply := tgbotapi.NewMessage(chatID, "⚠️ Введите число от 0 до 10")
-			reply.ReplyMarkup = getCancelKeyboard()
-			bot.Send(reply)
+		// Удаляем сообщение пользователя с введенной группой
+		bot.Send(tgbotapi.NewDeleteMessage(chatID, msg.MessageID))
+
+		if currentState.TempUser == nil {
+			currentState.TempUser = &User{}
+		}
+		currentState.TempUser.Group = group
+		currentState.State = "newUser_expires"
+		saveStates(states)
+		showExpiresInput(chatID, bot, messageID)
+
+	case "newUser_expires":
+		expires, err := time.Parse("02.01.2006", text)
+		if err != nil {
+			editMsg := tgbotapi.NewEditMessageText(chatID, messageID, "⚠️ Неверный формат. Используйте ДД.ММ.ГГГГ")
+			editMsg.ParseMode = "Markdown"
+			editMsg.ReplyMarkup = getExpiresInlineKeyboard()
+			sentMsg, _ := bot.Send(editMsg)
+			updateMainMsgID(chatID, sentMsg.MessageID)
+			bot.Send(tgbotapi.NewDeleteMessage(chatID, msg.MessageID))
 			return
 		}
+
+		// Удаляем сообщение пользователя с введенной датой
+		bot.Send(tgbotapi.NewDeleteMessage(chatID, msg.MessageID))
+
+		currentState.TempUser.Expires = expires
+		currentState.State = "newUser_comment"
+		saveStates(states)
+		showCommentInput(chatID, bot, messageID)
+
+	case "newUser_comment":
+		comment := text
+
+		// Удаляем сообщение пользователя с комментарием
+		bot.Send(tgbotapi.NewDeleteMessage(chatID, msg.MessageID))
+
+		currentState.TempUser.Comment = comment
+		users, _ := loadUsers()
+		users = append(users, *currentState.TempUser)
+		saveUsers(users)
+
+		userIDint, err := strconv.ParseInt(currentState.TempUser.ID, 10, 64)
+		var syncCode string
+		if err == nil && userIDint > 0 {
+			code, err := db.GenerateAndSaveCodeIntoDb(userIDint)
+			if err == nil {
+				syncCode = code
+			}
+		}
+
+		resultText := fmt.Sprintf("✅ *Пользователь добавлен!*\n🆔 ID: `%s`\n🏷 Группа: `%d`\n📅 Доступ до: `%s`\n💬 Комментарий: `%s`\n🔑 Пароль: `%s`\n🔑 Код синхронизации: `%s`",
+			escapeMarkdown(currentState.TempUser.ID), currentState.TempUser.Group,
+			currentState.TempUser.Expires.Format("02.01.2006"), escapeMarkdown(comment),
+			escapeMarkdown(currentState.TempUser.ID), syncCode)
+
+                // Сохраняем ID пользователя
+                userID := currentState.TempUser.ID
+
+                // Очищаем состояние
+		currentState.TempUser = nil
+		currentState.State = "start"
+		saveStates(states)
+
+		editMsg := tgbotapi.NewEditMessageText(chatID, messageID, resultText)
+		editMsg.ParseMode = "Markdown"
+                inlineKeyboard := tgbotapi.NewInlineKeyboardMarkup(
+                    tgbotapi.NewInlineKeyboardRow(
+                        tgbotapi.NewInlineKeyboardButtonData("✏️ Редактировать", fmt.Sprintf("edit_user:%s", userID)),
+                    ),
+                    tgbotapi.NewInlineKeyboardRow(
+                        tgbotapi.NewInlineKeyboardButtonData("🗑 Удалить", fmt.Sprintf("delete_user:%s", userID)),
+                    ),
+                    tgbotapi.NewInlineKeyboardRow(
+                        tgbotapi.NewInlineKeyboardButtonData("◀️ Назад к списку", "back_to_user_list"),
+                    ),
+                )
+		editMsg.ReplyMarkup = &inlineKeyboard
+		sentMsg, _ := bot.Send(editMsg)
+		updateMainMsgID(chatID, sentMsg.MessageID)
+
+	case "add_whitelist":
+		id, err := strconv.ParseInt(strings.TrimSpace(text), 10, 64)
+		if err != nil {
+			editMsg := tgbotapi.NewEditMessageText(chatID, messageID, "❌ Неверный формат ID. Введите число.")
+			editMsg.ParseMode = "Markdown"
+			editMsg.ReplyMarkup = getCancelInlineKeyboard()
+			sentMsg, _ := bot.Send(editMsg)
+			updateMainMsgID(chatID, sentMsg.MessageID)
+			bot.Send(tgbotapi.NewDeleteMessage(chatID, msg.MessageID))
+			return
+		}
+
+		if err := addToWhitelist(id); err != nil {
+			editMsg := tgbotapi.NewEditMessageText(chatID, messageID, fmt.Sprintf("❌ Ошибка сохранения: %v", err))
+			editMsg.ParseMode = "Markdown"
+			bot.Send(editMsg)
+			bot.Send(tgbotapi.NewDeleteMessage(chatID, msg.MessageID))
+			return
+		}
+
+		bot.Send(tgbotapi.NewDeleteMessage(chatID, msg.MessageID))
+
+		notifyMsg, _ := bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("✅ Пользователь %d добавлен в белый список", id)))
+
+		time.AfterFunc(3*time.Second, func() {
+			bot.Send(tgbotapi.NewDeleteMessage(chatID, notifyMsg.MessageID))
+		})
+
+		updateMainMenu(chatID, bot, messageID)
+
+		currentState.State = "start"
+		saveStates(states)
+		return
+
+	case "edit_wait_group":
+		group, err := strconv.Atoi(text)
+		if err != nil || group < 0 || group > 10 {
+			editMsg := tgbotapi.NewEditMessageText(chatID, currentState.TempMsgID, "⚠️ Введите число от 0 до 10")
+			editMsg.ParseMode = "Markdown"
+			editMsg.ReplyMarkup = getCancelInlineKeyboard()
+			sentMsg, _ := bot.Send(editMsg)
+			updateMainMsgID(chatID, sentMsg.MessageID)
+			bot.Send(tgbotapi.NewDeleteMessage(chatID, msg.MessageID))
+			return
+		}
+
+		bot.Send(tgbotapi.NewDeleteMessage(chatID, msg.MessageID))
 
 		users, _ := loadUsers()
 		for i := range users {
@@ -453,55 +1350,34 @@ func handleAdminMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 			}
 		}
 
-		currentState.State = "edit_menu"
+		handleUserDetail(chatID, bot, currentState.EditUserID, currentState.TempMsgID)
+
+		currentState.State = "start"
+		currentState.TempMsgID = 0
 		saveStates(states)
-
-		users, _ = loadUsers()
-		var user *User
-		for i := range users {
-			if users[i].ID == currentState.EditUserID {
-				user = &users[i]
-				break
-			}
-		}
-
-		reply := tgbotapi.NewMessage(chatID, fmt.Sprintf(
-			"✅ Группа изменена на %d\n\n"+
-				"🏷 Группа: %d\n📅 Срок: %s\n💬 Комментарий: %s\n🔞 Adult: %v\n👑 Admin: %v",
-			group, user.Group, user.Expires.Format("02.01.2006"),
-			user.Comment, user.Params.Adult, user.Params.Admin,
-		))
-		reply.ReplyMarkup = getEditKeyboard()
-		bot.Send(reply)
 		return
-	}
 
-	// Обработка редактирования срока
-	if currentState.State == "edit_expires" {
-		if msg.Text == "❌ Отменить" {
-			currentState.State = "edit_menu"
-			saveStates(states)
-			reply := tgbotapi.NewMessage(chatID, "✏️ Редактирование отменено")
-			reply.ReplyMarkup = getEditKeyboard()
-			bot.Send(reply)
-			return
-		}
-
+	case "edit_wait_expires":
 		var expires time.Time
-		if msg.Text == "📆 6 месяцев" {
+		if text == "📆 6 месяцев" {
 			expires = time.Now().AddDate(0, 6, 0)
-		} else if msg.Text == "📆 1 год" {
+		} else if text == "📆 1 год" {
 			expires = time.Now().AddDate(1, 0, 0)
 		} else {
 			var err error
-			expires, err = time.Parse("02.01.2006", msg.Text)
+			expires, err = time.Parse("02.01.2006", text)
 			if err != nil {
-				reply := tgbotapi.NewMessage(chatID, "⚠️ Неверный формат. Используйте ДД.ММ.ГГГГ")
-				reply.ReplyMarkup = getExpiresKeyboard()
-				bot.Send(reply)
+				editMsg := tgbotapi.NewEditMessageText(chatID, currentState.TempMsgID, "⚠️ Неверный формат. Используйте ДД.ММ.ГГГГ")
+				editMsg.ParseMode = "Markdown"
+				editMsg.ReplyMarkup = getExpiresInlineKeyboard()
+				sentMsg, _ := bot.Send(editMsg)
+				updateMainMsgID(chatID, sentMsg.MessageID)
+				bot.Send(tgbotapi.NewDeleteMessage(chatID, msg.MessageID))
 				return
 			}
 		}
+
+		bot.Send(tgbotapi.NewDeleteMessage(chatID, msg.MessageID))
 
 		users, _ := loadUsers()
 		for i := range users {
@@ -512,44 +1388,20 @@ func handleAdminMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 			}
 		}
 
-		currentState.State = "edit_menu"
+		handleUserDetail(chatID, bot, currentState.EditUserID, currentState.TempMsgID)
+
+		currentState.State = "start"
+		currentState.TempMsgID = 0
 		saveStates(states)
-
-		users, _ = loadUsers()
-		var user *User
-		for i := range users {
-			if users[i].ID == currentState.EditUserID {
-				user = &users[i]
-				break
-			}
-		}
-
-		reply := tgbotapi.NewMessage(chatID, fmt.Sprintf(
-			"✅ Срок изменён на %s\n\n"+
-				"🏷 Группа: %d\n📅 Срок: %s\n💬 Комментарий: %s\n🔞 Adult: %v\n👑 Admin: %v",
-			expires.Format("02.01.2006"), user.Group, user.Expires.Format("02.01.2006"),
-			user.Comment, user.Params.Adult, user.Params.Admin,
-		))
-		reply.ReplyMarkup = getEditKeyboard()
-		bot.Send(reply)
 		return
-	}
 
-	// Обработка редактирования комментария
-	if currentState.State == "edit_comment" {
-		if msg.Text == "❌ Отменить" {
-			currentState.State = "edit_menu"
-			saveStates(states)
-			reply := tgbotapi.NewMessage(chatID, "✏️ Редактирование отменено")
-			reply.ReplyMarkup = getEditKeyboard()
-			bot.Send(reply)
-			return
-		}
-
-		comment := msg.Text
+	case "edit_wait_comment":
+		comment := text
 		if comment == "💬 Без комментария" {
 			comment = ""
 		}
+
+		bot.Send(tgbotapi.NewDeleteMessage(chatID, msg.MessageID))
 
 		users, _ := loadUsers()
 		for i := range users {
@@ -560,486 +1412,19 @@ func handleAdminMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 			}
 		}
 
-		currentState.State = "edit_menu"
+		handleUserDetail(chatID, bot, currentState.EditUserID, currentState.TempMsgID)
+
+		currentState.State = "start"
+		currentState.TempMsgID = 0
 		saveStates(states)
-
-		users, _ = loadUsers()
-		var user *User
-		for i := range users {
-			if users[i].ID == currentState.EditUserID {
-				user = &users[i]
-				break
-			}
-		}
-
-		reply := tgbotapi.NewMessage(chatID, fmt.Sprintf(
-			"✅ Комментарий изменён: %s\n\n"+
-				"🏷 Группа: %d\n📅 Срок: %s\n💬 Комментарий: %s\n🔞 Adult: %v\n👑 Admin: %v",
-			comment, user.Group, user.Expires.Format("02.01.2006"),
-			user.Comment, user.Params.Adult, user.Params.Admin,
-		))
-		reply.ReplyMarkup = getEditKeyboard()
-		bot.Send(reply)
 		return
-	}
-
-	// Обработка кнопок редактирования из меню
-	if currentState.State == "edit_menu" {
-		switch msg.Text {
-		case "🏷 Группа":
-			currentState.State = "edit_group"
-			saveStates(states)
-			reply := tgbotapi.NewMessage(chatID, "Введите новую группу (0-10):")
-			reply.ReplyMarkup = getCancelKeyboard()
-			bot.Send(reply)
-			return
-		case "📅 Срок":
-			currentState.State = "edit_expires"
-			saveStates(states)
-			reply := tgbotapi.NewMessage(chatID, "Введите новую дату (ДД.ММ.ГГГГ) или выберите срок:")
-			reply.ReplyMarkup = getExpiresKeyboard()
-			bot.Send(reply)
-			return
-		case "💬 Комментарий":
-			currentState.State = "edit_comment"
-			saveStates(states)
-			reply := tgbotapi.NewMessage(chatID, "Введите новый комментарий:")
-			reply.ReplyMarkup = getCommentKeyboard()
-			bot.Send(reply)
-			return
-		case "🔞 Adult":
-			users, _ := loadUsers()
-			for i := range users {
-				if users[i].ID == currentState.EditUserID {
-					users[i].Params.Adult = !users[i].Params.Adult
-					saveUsers(users)
-					break
-				}
-			}
-			users, _ = loadUsers()
-			var user *User
-			for i := range users {
-				if users[i].ID == currentState.EditUserID {
-					user = &users[i]
-					break
-				}
-			}
-			reply := tgbotapi.NewMessage(chatID, fmt.Sprintf(
-				"✅ Adult: %v\n\n"+
-					"🏷 Группа: %d\n📅 Срок: %s\n💬 Комментарий: %s\n🔞 Adult: %v\n👑 Admin: %v",
-				user.Params.Adult, user.Group, user.Expires.Format("02.01.2006"),
-				user.Comment, user.Params.Adult, user.Params.Admin,
-			))
-			reply.ReplyMarkup = getEditKeyboard()
-			bot.Send(reply)
-			return
-		case "👑 Admin":
-			users, _ := loadUsers()
-			for i := range users {
-				if users[i].ID == currentState.EditUserID {
-					users[i].Params.Admin = !users[i].Params.Admin
-					saveUsers(users)
-					break
-				}
-			}
-			users, _ = loadUsers()
-			var user *User
-			for i := range users {
-				if users[i].ID == currentState.EditUserID {
-					user = &users[i]
-					break
-				}
-			}
-			reply := tgbotapi.NewMessage(chatID, fmt.Sprintf(
-				"✅ Admin: %v\n\n"+
-					"🏷 Группа: %d\n📅 Срок: %s\n💬 Комментарий: %s\n🔞 Adult: %v\n👑 Admin: %v",
-				user.Params.Admin, user.Group, user.Expires.Format("02.01.2006"),
-				user.Comment, user.Params.Adult, user.Params.Admin,
-			))
-			reply.ReplyMarkup = getEditKeyboard()
-			bot.Send(reply)
-			return
-		case "❌ Отменить":
-			currentState.State = "start"
-			saveStates(states)
-			reply := tgbotapi.NewMessage(chatID, "✅ Редактирование завершено")
-			reply.ReplyMarkup = getAdminKeyboard()
-			bot.Send(reply)
-			return
-		}
-	}
-
-	// Обычные админ-команды
-	switch msg.Text {
-	case "🆕 Новый пользователь":
-                log.Printf("🔧 Обработка НОВЫЙ ПОЛЬЗОВАТЕЛЬ")
-		currentState.State = "newUser_id"
-		currentState.TempUser = nil
-		currentState.EditUserID = ""
-                if err := saveStates(states); err != nil {
-                    log.Printf("❌ Ошибка сохранения состояния: %v", err)
-                }
-		response := "📝 Введите ID нового пользователя:\n• Не менее 6 символов\n• Только цифры"
-		reply := tgbotapi.NewMessage(chatID, response)
-//		reply.ParseMode = "Markdown"
-		reply.ReplyMarkup = getCancelKeyboard()
-                if _, err := bot.Send(reply); err != nil {
-                    log.Printf("❌ Ошибка отправки сообщения: %v", err)
-                }
-                log.Printf("✅ Состояние изменено на newUser_id, ответ отправлен")
-                return
-
-	case "👥 Пользователи":
-		handleListUsers(chatID, bot)
-
-	case "🗑 Удалить пользователя":
-		handleDeleteUser(chatID, bot)
-
-	case "✏️ Редактировать пользователя":
-		handleEditUserSelect(chatID, bot)
-
-	case "➕ Добавить в белый список":
-		currentState.State = "add_whitelist"
-		currentState.TempUser = nil
-		saveStates(states)
-		reply := tgbotapi.NewMessage(chatID, "📝 *Введите Telegram ID пользователя для добавления в белый список:*")
-		reply.ParseMode = "Markdown"
-		reply.ReplyMarkup = getCancelKeyboard()
-		bot.Send(reply)
-
-	case "🗑 Удалить из белого списка":
-		handleRemoveFromWhitelist(chatID, bot)
-
-	case "📋 Белый список":
-		handleShowWhitelist(chatID, bot)
 
 	default:
-		// Создание нового пользователя
-		switch currentState.State {
-		case "newUser_id":
-			if msg.Text == "❌ Отменить" {
-				currentState.State = "start"
-				saveStates(states)
-				reply := tgbotapi.NewMessage(chatID, "🚫 Добавление отменено")
-				reply.ReplyMarkup = getAdminKeyboard()
-				bot.Send(reply)
-				return
-			}
-
-			userID := strings.ToLower(msg.Text)
-
-                        // Проверяем, что введены только цифры
-                        if !regexp.MustCompile(`^\d+$`).MatchString(userID) {
-                            reply := tgbotapi.NewMessage(chatID, "⚠️ ID должен содержать только цифры.")
-                            reply.ReplyMarkup = getCancelKeyboard()
-                            bot.Send(reply)
-                            return
-                        }
-
-                        // Проверяем длину (Telegram ID обычно 9-10 цифр, но пусть будет не менее 6)
-			if len(userID) < 6 {
-				reply := tgbotapi.NewMessage(chatID, "⚠️ ID должен быть не короче 6 символов")
-				reply.ReplyMarkup = getCancelKeyboard()
-				bot.Send(reply)
-				return
-			}
-
-			users, _ := loadUsers()
-			for _, u := range users {
-				if u.ID == userID {
-					reply := tgbotapi.NewMessage(chatID, "⚠️ Этот ID уже существует")
-					reply.ReplyMarkup = getCancelKeyboard()
-					bot.Send(reply)
-					return
-				}
-			}
-
-			currentState.TempUser = &User{ID: userID}
-			currentState.State = "newUser_group"
-			saveStates(states)
-			reply := tgbotapi.NewMessage(chatID, "🔢 *Введите группу (0-10)* или нажмите '1️⃣ Группа 1':")
-			reply.ParseMode = "Markdown"
-			reply.ReplyMarkup = getGroupKeyboard()
-			bot.Send(reply)
-
-		case "newUser_group":
-			if msg.Text == "❌ Отменить" {
-				currentState.State = "start"
-				saveStates(states)
-				reply := tgbotapi.NewMessage(chatID, "🚫 Добавление отменено")
-				reply.ReplyMarkup = getAdminKeyboard()
-				bot.Send(reply)
-				return
-			}
-
-			var group int
-			if msg.Text == "1️⃣ Группа 1" {
-				group = 1
-			} else if msg.Text == "2️⃣ Группа 2" {
-				group = 2
-			} else {
-				g, err := strconv.Atoi(msg.Text)
-				if err != nil || g < 0 || g > 10 {
-					reply := tgbotapi.NewMessage(chatID, "⚠️ Введите число от 0 до 10")
-					reply.ReplyMarkup = getGroupKeyboard()
-					bot.Send(reply)
-					return
-				}
-				group = g
-			}
-
-			currentState.TempUser.Group = group
-			currentState.State = "newUser_expires"
-			saveStates(states)
-			reply := tgbotapi.NewMessage(chatID, "📅 *Введите дату (ДД.ММ.ГГГГ)* или выберите срок:")
-			reply.ParseMode = "Markdown"
-			reply.ReplyMarkup = getExpiresKeyboard()
-			bot.Send(reply)
-
-		case "newUser_expires":
-			if msg.Text == "❌ Отменить" {
-				currentState.State = "start"
-				saveStates(states)
-				reply := tgbotapi.NewMessage(chatID, "🚫 Добавление отменено")
-				reply.ReplyMarkup = getAdminKeyboard()
-				bot.Send(reply)
-				return
-			}
-
-			var expires time.Time
-			if msg.Text == "📆 6 месяцев" {
-				expires = time.Now().AddDate(0, 6, 0)
-			} else if msg.Text == "📆 1 год" {
-				expires = time.Now().AddDate(1, 0, 0)
-			} else {
-				var err error
-				expires, err = time.Parse("02.01.2006", msg.Text)
-				if err != nil {
-					reply := tgbotapi.NewMessage(chatID, "⚠️ Неверный формат. Используйте ДД.ММ.ГГГГ")
-					reply.ReplyMarkup = getExpiresKeyboard()
-					bot.Send(reply)
-					return
-				}
-			}
-
-			currentState.TempUser.Expires = expires
-			currentState.State = "newUser_comment"
-			saveStates(states)
-			reply := tgbotapi.NewMessage(chatID, "💬 *Комментарий* или '💬 Без комментария':")
-			reply.ParseMode = "Markdown"
-			reply.ReplyMarkup = getCommentKeyboard()
-			bot.Send(reply)
-
-		case "newUser_comment":
-			if msg.Text == "❌ Отменить" {
-				currentState.State = "start"
-				saveStates(states)
-				reply := tgbotapi.NewMessage(chatID, "🚫 Добавление отменено")
-				reply.ReplyMarkup = getAdminKeyboard()
-				bot.Send(reply)
-				return
-			}
-
-			if msg.Text != "💬 Без комментария" {
-				currentState.TempUser.Comment = msg.Text
-			}
-
-			users, _ := loadUsers()
-			users = append(users, *currentState.TempUser)
-			saveUsers(users)
-
-                        // Генерируем код синхронизации для нового пользователя
-                        userIDStr := currentState.TempUser.ID
-                        userIDint, err := strconv.ParseInt(userIDStr, 10, 64)
-                        var syncCode string
-                        if err == nil && userIDint > 0 {
-                            code, err := db.GenerateAndSaveCodeIntoDb(userIDint)
-                            if err == nil {
-                                syncCode = code
-                            } else {
-                                syncCode = "❌ ошибка"
-                            }
-                        } else {
-                            syncCode = "❌ ID не число"
-                        }
-
-			newUser := currentState.TempUser
-			currentState.TempUser = nil
-			currentState.State = "start"
-			saveStates(states)
-
-			response := fmt.Sprintf("✅ *Пользователь добавлен!*\n🆔 ID: %s\n🏷 Группа: %d\n📅 Доступ до: %s\n💬 Комментарий: %s\n🔑 Пароль для входа: `%s`\n🔑 Код синхронизации: `%s`",
-				escapeMarkdown(newUser.ID), newUser.Group, newUser.Expires.Format("02.01.2006"), escapeMarkdown(newUser.Comment), escapeMarkdown(newUser.ID), syncCode)
-			reply := tgbotapi.NewMessage(chatID, response)
-			reply.ParseMode = "Markdown"
-			reply.ReplyMarkup = getAdminKeyboard()
-			bot.Send(reply)
-
-		case "add_whitelist":
-			if msg.Text == "❌ Отменить" {
-				currentState.State = "start"
-				saveStates(states)
-				reply := tgbotapi.NewMessage(chatID, "🚫 Добавление в белый список отменено")
-				reply.ReplyMarkup = getAdminKeyboard()
-				bot.Send(reply)
-				return
-			}
-
-			id, err := strconv.ParseInt(strings.TrimSpace(msg.Text), 10, 64)
-			if err != nil {
-				reply := tgbotapi.NewMessage(chatID, "❌ Неверный формат ID. Введите число.")
-				reply.ReplyMarkup = getCancelKeyboard()
-				bot.Send(reply)
-				return
-			}
-
-			if err := addToWhitelist(id); err != nil {
-				reply := tgbotapi.NewMessage(chatID, fmt.Sprintf("❌ Ошибка сохранения: %v", err))
-				bot.Send(reply)
-				return
-			}
-
-			currentState.State = "start"
-			saveStates(states)
-
-			reply := tgbotapi.NewMessage(chatID, fmt.Sprintf("✅ Пользователь `%d` добавлен в белый список!", id))
-			reply.ParseMode = "Markdown"
-			reply.ReplyMarkup = getAdminKeyboard()
-			bot.Send(reply)
-		}
+		updateMainMenu(chatID, bot, messageID)
 	}
 }
 
-func handleRemoveFromWhitelist(chatID int64, bot *tgbotapi.BotAPI) {
-	if len(allowedUserIDs) == 0 {
-		msg := tgbotapi.NewMessage(chatID, "📭 Белый список пуст")
-		bot.Send(msg)
-		return
-	}
-
-	hasNonAdmin := false
-	for id := range allowedUserIDs {
-		if !isAdmin(id) {
-			hasNonAdmin = true
-			break
-		}
-	}
-
-	if !hasNonAdmin {
-		msg := tgbotapi.NewMessage(chatID, "📭 В белом списке только администратор, удалять некого")
-		bot.Send(msg)
-		return
-	}
-
-	for id := range allowedUserIDs {
-		if isAdmin(id) {
-			continue
-		}
-		inlineKeyboard := tgbotapi.NewInlineKeyboardMarkup(
-			tgbotapi.NewInlineKeyboardRow(
-				tgbotapi.NewInlineKeyboardButtonData("🗑 Удалить из белого списка", fmt.Sprintf("whitelist_remove:%d", id)),
-			),
-		)
-		msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("👤 Telegram ID: `%d`", id))
-		msg.ParseMode = "Markdown"
-		msg.ReplyMarkup = inlineKeyboard
-		bot.Send(msg)
-	}
-}
-
-func handleEditUserSelect(chatID int64, bot *tgbotapi.BotAPI) {
-	users, err := loadUsers()
-	if err != nil || len(users) == 0 {
-		msg := tgbotapi.NewMessage(chatID, "📭 Список пользователей пуст")
-		bot.Send(msg)
-		return
-	}
-
-	for _, user := range users {
-		inlineKeyboard := tgbotapi.NewInlineKeyboardMarkup(
-			tgbotapi.NewInlineKeyboardRow(
-				tgbotapi.NewInlineKeyboardButtonData("✏️ Редактировать", fmt.Sprintf("edit:%s", user.ID)),
-			),
-		)
-		expiresDate := user.Expires.Format("02.01.2006")
-		msg := tgbotapi.NewMessage(chatID, fmt.Sprintf(
-			"👤 *%s*\n🏷 Группа: %d\n📅 Доступ до: %s\n💬 Комментарий: %s",
-			escapeMarkdown(user.ID), user.Group, expiresDate, escapeMarkdown(user.Comment),
-		))
-		msg.ParseMode = "Markdown"
-		msg.ReplyMarkup = inlineKeyboard
-		bot.Send(msg)
-	}
-}
-
-func handleDeleteUser(chatID int64, bot *tgbotapi.BotAPI) {
-	users, err := loadUsers()
-	if err != nil || len(users) == 0 {
-		msg := tgbotapi.NewMessage(chatID, "📭 Список пользователей пуст")
-		bot.Send(msg)
-		return
-	}
-
-	for _, user := range users {
-		inlineKeyboard := tgbotapi.NewInlineKeyboardMarkup(
-			tgbotapi.NewInlineKeyboardRow(
-				tgbotapi.NewInlineKeyboardButtonData("🗑 Удалить", fmt.Sprintf("delete:%s", user.ID)),
-			),
-		)
-		msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("👤 *%s*", escapeMarkdown(user.ID)))
-		msg.ParseMode = "Markdown"
-		msg.ReplyMarkup = inlineKeyboard
-		bot.Send(msg)
-	}
-}
-
-func handleListUsers(chatID int64, bot *tgbotapi.BotAPI) {
-	users, err := loadUsers()
-	if err != nil || len(users) == 0 {
-		msg := tgbotapi.NewMessage(chatID, "📭 Список пользователей пуст")
-		bot.Send(msg)
-		return
-	}
-
-	for _, user := range users {
-		expiresDate := user.Expires.Format("02.01.2006")
-
-                // Получаем код синхронизации
-                userTelegramID, _ := strconv.ParseInt(user.ID, 10, 64)
-                syncCode := "❌ нет"
-                if userTelegramID > 0 {
-                    code, err := db.GenerateAndSaveCodeIntoDb(userTelegramID)
-                    if err == nil && code != "" {
-                        syncCode = code
-                    }
-                }
-
-		msg := tgbotapi.NewMessage(chatID, fmt.Sprintf(
-			"👤 %s\n🏷 Группа: %d\n📅 Доступ до: %s\n💬 Комментарий: %s\n🔞 Adult: %v | 👑 Admin: %v\n🔑 Пароль для входа: `%s`\n🔑 Код синхронизации: `%s`",
-			escapeMarkdown(user.ID), user.Group, expiresDate, escapeMarkdown(user.Comment), user.Params.Adult, user.Params.Admin, escapeMarkdown(user.ID), syncCode,
-		))
-		msg.ParseMode = "Markdown"
-		bot.Send(msg)
-	}
-}
-
-func handleShowWhitelist(chatID int64, bot *tgbotapi.BotAPI) {
-	if len(allowedUserIDs) == 0 {
-		msg := tgbotapi.NewMessage(chatID, "📭 Белый список пуст")
-		bot.Send(msg)
-		return
-	}
-
-	var ids []string
-	for id := range allowedUserIDs {
-		ids = append(ids, fmt.Sprintf("- `%d`", id))
-	}
-
-	msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("📋 *Белый список Telegram ID:*\n%s", strings.Join(ids, "\n")))
-	msg.ParseMode = "Markdown"
-	bot.Send(msg)
-}
-
+// ========== BOT BOOTSTRAP ==========
 func BootstrapBot(appContext *AppContext) {
 	botToken := os.Getenv("TELEGRAM_BOT_TOKEN")
 	if botToken == "" {
@@ -1048,15 +1433,15 @@ func BootstrapBot(appContext *AppContext) {
 
 	adminIDsStr := os.Getenv("TELEGRAM_ADMIN_ID")
 	if adminIDsStr != "" {
-            for _, idStr := range strings.Split(adminIDsStr, ",") {
-                idStr = strings.TrimSpace(idStr)
-                if id, err := strconv.ParseInt(idStr, 10, 64); err == nil {
-                    adminIDs[id] = true
-                }
-            }
-        }
-        if len(adminIDs) == 0 {
-	    log.Println("⚠️ TELEGRAM_ADMIN_ID не задан, функции администратора отключены")
+		for _, idStr := range strings.Split(adminIDsStr, ",") {
+			idStr = strings.TrimSpace(idStr)
+			if id, err := strconv.ParseInt(idStr, 10, 64); err == nil {
+				adminIDs[id] = true
+			}
+		}
+	}
+	if len(adminIDs) == 0 {
+		log.Println("⚠️ TELEGRAM_ADMIN_ID не задан, функции администратора отключены")
 	}
 
 	if err := loadWhitelist(); err != nil {
@@ -1083,11 +1468,9 @@ func BootstrapBot(appContext *AppContext) {
 			go handleCallbackQuery(bot, update.CallbackQuery)
 			continue
 		}
-
 		if update.Message == nil {
 			continue
 		}
-
 		chatID := update.Message.Chat.ID
 		telegramID := update.Message.From.ID
 
@@ -1096,63 +1479,58 @@ func BootstrapBot(appContext *AppContext) {
 			log.Printf("🔧 Админ %d написал: %s", chatID, update.Message.Text)
 
 			if update.Message.Text == "/start" {
-                                // === ДОБАВЛЯЕМ АДМИНА В users.JSON ЕСЛИ ЕГО ТАМ НЕТ ===
-                                telegramIDStr := fmt.Sprintf("%d", telegramID)
-                                users, _ := loadUsers()
-                                existingUser := findUserByTelegramID(users, telegramID)
-
-                                if existingUser == nil {
-                                    newUser := User{
-                                        ID:      telegramIDStr,
-                                        Group:   0,
-                                        Expires: time.Now().AddDate(100, 0, 0), // На 100 лет
-                                        Comment: "Администратор",
-                                        Params:  UserParams{Adult: false, Admin: false},
-                                    }
-                                    users = append(users, newUser)
-                                    saveUsers(users)
-                                }
-
-                                // Генерируем код синхронизации
+				telegramIDStr := fmt.Sprintf("%d", telegramID)
+				users, _ := loadUsers()
+				existingUser := findUserByTelegramID(users, telegramID)
+				if existingUser == nil {
+					newUser := User{
+						ID:      telegramIDStr,
+						Group:   0,
+						Expires: time.Now().AddDate(100, 0, 0),
+						Comment: "Администратор",
+						Params:  UserParams{Adult: false, Admin: false},
+					}
+					users = append(users, newUser)
+					saveUsers(users)
+				}
 				code, err := db.GenerateAndSaveCodeIntoDb(chatID)
 				if err != nil {
 					log.Println("Ошибка сохранения кода:", err)
 					bot.Send(tgbotapi.NewMessage(chatID, "Ошибка при генерации кода"))
 					continue
 				}
-
-				response := fmt.Sprintf(
-					"👋 *Администратор*\n\n📌 *Ваш Telegram ID:* `%d`\n🔑 *Ваш пароль для входа:* `%d`\n🔑 *Ваш код для синхронизации:* `%s`\n\nВведите в настройках аккаунта Lampa.",
-					telegramID, telegramID, code,
-				)
+				response := fmt.Sprintf("👋 *Администратор*\n\n📌 *Ваш Telegram ID:* `%d`\n🔑 *Ваш пароль для входа:* `%d`\n🔑 *Ваш код для синхронизации:* `%s`\n\nВведите в настройках аккаунта Lampa.", telegramID, telegramID, code)
 				msg := tgbotapi.NewMessage(chatID, response)
 				msg.ParseMode = "Markdown"
-				msg.ReplyMarkup = getAdminKeyboard()
-				bot.Send(msg)
+				msg.ReplyMarkup = getMainMenuKeyboard()
+				sentMsg, _ := bot.Send(msg)
+				updateMainMsgID(chatID, sentMsg.MessageID)
 				continue
 			}
 
-                        log.Printf("🔍 Отправляем в handleAdminMessage: %s", update.Message.Text)
-			go handleAdminMessage(bot, update.Message)
+			msgID := getMainMsgID(chatID)
+			if msgID == 0 {
+				msg := tgbotapi.NewMessage(chatID, "👋 Главное меню")
+				msg.ReplyMarkup = getMainMenuKeyboard()
+				sentMsg, _ := bot.Send(msg)
+				msgID = sentMsg.MessageID
+				updateMainMsgID(chatID, msgID)
+			}
+			go handleAdminMessage(bot, update.Message, msgID)
 			continue
 		}
 
 		// ОБЫЧНЫЙ ПОЛЬЗОВАТЕЛЬ
 		if !isAllowed(chatID) {
-			response := fmt.Sprintf(
-				"⛔ *Доступ запрещён.*\n\n📌 *Ваш Telegram ID:* `%d`\n\nСообщите этот ID администратору или покиньте бота, если не знаете, зачем вы здесь.",
-				telegramID,
-			)
+			response := fmt.Sprintf("⛔ *Доступ запрещён.*\n\n📌 *Ваш Telegram ID:* `%d`\n\nСообщите этот ID администратору.", telegramID)
 			msg := tgbotapi.NewMessage(chatID, response)
 			msg.ParseMode = "Markdown"
 			bot.Send(msg)
 			continue
 		}
-
 		if update.Message.Text == "/start" {
 			users, _ := loadUsers()
 			existingUser := findUserByTelegramID(users, telegramID)
-
 			if existingUser == nil {
 				_, err := autoCreateUser(telegramID)
 				if err != nil {
@@ -1160,30 +1538,23 @@ func BootstrapBot(appContext *AppContext) {
 					bot.Send(tgbotapi.NewMessage(chatID, "Ошибка при создании пользователя"))
 					continue
 				}
-                                users, _ = loadUsers()
-                                existingUser = findUserByTelegramID(users, telegramID)
+				users, _ = loadUsers()
+				existingUser = findUserByTelegramID(users, telegramID)
 			}
-
 			code, err := db.GenerateAndSaveCodeIntoDb(chatID)
 			if err != nil {
 				log.Println("Ошибка сохранения кода:", err)
 				bot.Send(tgbotapi.NewMessage(chatID, "Ошибка при генерации кода"))
 				continue
 			}
-
 			password := generatePassword(telegramID)
-                        expiresDate := existingUser.Expires.Format("02.01.2006")
-
-			response := fmt.Sprintf(
-				"🔑 *Ваш пароль для входа:* `%s`\n🔑 *Ваш код для синхронизации:* `%s`\n📅 *Ваша подписка активна до:* `%s`",
-				password, code, expiresDate,
-			)
+			expiresDate := existingUser.Expires.Format("02.01.2006")
+			response := fmt.Sprintf("🔑 *Ваш пароль для входа:* `%s`\n🔑 *Ваш код для синхронизации:* `%s`\n📅 *Ваша подписка активна до:* `%s`", password, code, expiresDate)
 			msg := tgbotapi.NewMessage(chatID, response)
 			msg.ParseMode = "Markdown"
 			bot.Send(msg)
 			continue
 		}
-
 		msg := tgbotapi.NewMessage(chatID, "🤖 Используйте команду /start для получения токена синхронизации")
 		bot.Send(msg)
 	}
