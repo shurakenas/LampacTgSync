@@ -297,9 +297,21 @@
             return;
           }
           var items = ["torrents_view", "favorite", "file_view", "search_history"];
+          var needRefresh = false;
+          
           for (var i = 0; i < items.length; i++) {
             var item = items[i];
             if (data.hasOwnProperty(item) && (Array.isArray(data[item]) || typeof data[item] === "object")) {
+              // Проверяем, изменились ли данные
+              var currentValue = Lampa.Storage.get(item);
+              var newValueStr = JSON.stringify(data[item]);
+              var currentValueStr = JSON.stringify(currentValue);
+              
+              if (currentValueStr !== newValueStr) {
+                needRefresh = true;
+                console.log("Изменены данные: " + item);
+              }
+              
               if (item === "favorite") {
                 Lampa.Storage.set("favorite", data[item]);
                 Lampa.Favorite.init();
@@ -308,6 +320,25 @@
               }
             } else {
               console.log("Ошибка: Данные для ключа \"" + item + "\" некорректны");
+            }
+          }
+          
+          // АВТОМАТИЧЕСКАЯ ПЕРЕРИСОВКА ИНТЕРФЕЙСА
+          if (needRefresh) {
+            console.log("🔄 Автоматическое обновление интерфейса после синхронизации");
+            try {
+              var activeActivity = Lampa.Activity.active();
+              if (activeActivity) {
+                Lampa.Activity.replace(activeActivity);
+                if (activeActivity.outdated !== undefined) {
+                  activeActivity.outdated = false;
+                }
+              }
+              Lampa.Timeline.read();
+              Lampa.Favorite.read();
+              console.log("✅ Интерфейс обновлен автоматически");
+            } catch(e) {
+              console.log("Ошибка при обновлении интерфейса:", e);
             }
           }
         }
