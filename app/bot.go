@@ -30,6 +30,7 @@ type User struct {
 
 type UserParams struct {
 	Adult bool `json:"adult"`
+        Tv    bool `json:"tv"`
 	Admin bool `json:"admin"`
 }
 
@@ -236,7 +237,7 @@ func autoCreateUser(telegramID int64) (string, error) {
 		Group:   1,
 		Expires: time.Now().AddDate(1, 0, 0),
 		Comment: fmt.Sprintf("Автоматически создан из Telegram ID %d", telegramID),
-		Params:  UserParams{Adult: false, Admin: false},
+		Params:  UserParams{Adult: false, Tv: false, Admin: false},
 	}
 
 	users = append(users, newUser)
@@ -321,10 +322,13 @@ func getEditInlineKeyboard(userID string) *tgbotapi.InlineKeyboardMarkup {
 		),
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("💬 Комментарий", fmt.Sprintf("edit:comment:%s", userID)),
-			tgbotapi.NewInlineKeyboardButtonData("🔞 Adult", fmt.Sprintf("edit:adult:%s", userID)),
 		),
+                tgbotapi.NewInlineKeyboardRow(
+                        tgbotapi.NewInlineKeyboardButtonData("🔞 Adult", fmt.Sprintf("edit:adult:%s", userID)),
+                        tgbotapi.NewInlineKeyboardButtonData("📺 TV", fmt.Sprintf("edit:tv:%s", userID)),
+                        tgbotapi.NewInlineKeyboardButtonData("👑 Admin", fmt.Sprintf("edit:admin:%s", userID)),
+                ),
 		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("👑 Admin", fmt.Sprintf("edit:admin:%s", userID)),
 			tgbotapi.NewInlineKeyboardButtonData("❌ Отменить", "cancel"),
 		),
 	)
@@ -417,9 +421,9 @@ func handleUserDetail(chatID int64, bot *tgbotapi.BotAPI, userID string, message
 	}
 
 	text := fmt.Sprintf(
-		"👤 *%s*\n🏷 Группа: `%d`\n📅 Доступ до: `%s`\n💬 Комментарий: `%s`\n🔞 Adult: %v | 👑 Admin: %v\n🔑 Пароль: `%s`\n🔑 Код: `%s`",
+		"👤 *%s*\n🏷 Группа: `%d`\n📅 Доступ до: `%s`\n💬 Комментарий: `%s`\n🔞 Adult: %v | 📺 TV: %v | 👑 Admin: %v\n🔑 Пароль: `%s`\n🔑 Код: `%s`",
 		escapeMarkdown(user.ID), user.Group, expiresDate, escapeMarkdown(user.Comment),
-		user.Params.Adult, user.Params.Admin, escapeMarkdown(user.ID), syncCode,
+		user.Params.Adult, user.Params.Tv, user.Params.Admin, escapeMarkdown(user.ID), syncCode,
 	)
 
 	inlineKeyboard := tgbotapi.NewInlineKeyboardMarkup(
@@ -577,7 +581,7 @@ func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery)
 				}
 			}
 
-			resultText := fmt.Sprintf("✅ *Пользователь добавлен!*\n🆔 ID: `%s`\n🏷 Группа: `%d`\n📅 Доступ до: `%s`\n💬 Комментарий: `%s`\n🔑 Пароль: `%s`\n🔑 Код синхронизации: `%s`",
+			resultText := fmt.Sprintf("✅ *Пользователь добавлен!*\n🆔 ID: `%s`\n🏷 Группа: `%d`\n📅 Доступ до: `%s`\n💬 Комментарий: `%s`\n🔞 Adult: false | 📺 TV: false | 👑 Admin: false\n🔑 Пароль: `%s`\n🔑 Код синхронизации: `%s`",
 				escapeMarkdown(currentState.TempUser.ID), currentState.TempUser.Group,
 				currentState.TempUser.Expires.Format("02.01.2006"), "",
 				escapeMarkdown(currentState.TempUser.ID), syncCode)
@@ -799,7 +803,7 @@ func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery)
 			}
 			saveStates(states)
 
-			text := fmt.Sprintf("✅ *Пользователь добавлен!*\n🆔 ID: `%s`\n🏷 Группа: `%d`\n📅 Доступ до: `%s`\n💬 Комментарий: `%s`\n🔑 Пароль: `%s`\n🔑 Код синхронизации: `%s`",
+			text := fmt.Sprintf("✅ *Пользователь добавлен!*\n🆔 ID: `%s`\n🏷 Группа: `%d`\n📅 Доступ до: `%s`\n💬 Комментарий: `%s`\n🔞 Adult: false | 📺 TV: false | 👑 Admin: false\n🔑 Пароль: `%s`\n🔑 Код синхронизации: `%s`",
 				escapeMarkdown(tempUser.ID), tempUser.Group, tempUser.Expires.Format("02.01.2006"),
 				escapeMarkdown(tempUser.Comment), escapeMarkdown(tempUser.ID), syncCode)
 			editMsg := tgbotapi.NewEditMessageText(chatID, msgID, text)
@@ -916,6 +920,20 @@ func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery)
 		handleUserDetail(chatID, bot, userID, msgID)
 		return
 	}
+
+        if strings.HasPrefix(data, "edit:tv:") {
+                userID := strings.TrimPrefix(data, "edit:tv:")
+                users, _ := loadUsers()
+                for i := range users {
+                        if users[i].ID == userID {
+                                 users[i].Params.Tv = !users[i].Params.Tv
+                                 saveUsers(users)
+                                 break
+                        }
+                }
+                handleUserDetail(chatID, bot, userID, msgID)
+                return
+        }
 
 	if strings.HasPrefix(data, "edit:admin:") {
 		userID := strings.TrimPrefix(data, "edit:admin:")
@@ -1263,7 +1281,7 @@ func handleAdminMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message, messageID i
 			}
 		}
 
-		resultText := fmt.Sprintf("✅ *Пользователь добавлен!*\n🆔 ID: `%s`\n🏷 Группа: `%d`\n📅 Доступ до: `%s`\n💬 Комментарий: `%s`\n🔑 Пароль: `%s`\n🔑 Код синхронизации: `%s`",
+		resultText := fmt.Sprintf("✅ *Пользователь добавлен!*\n🆔 ID: `%s`\n🏷 Группа: `%d`\n📅 Доступ до: `%s`\n💬 Комментарий: `%s`\n🔞 Adult: false | 📺 TV: false | 👑 Admin: false\n🔑 Пароль: `%s`\n🔑 Код синхронизации: `%s`",
 			escapeMarkdown(currentState.TempUser.ID), currentState.TempUser.Group,
 			currentState.TempUser.Expires.Format("02.01.2006"), escapeMarkdown(comment),
 			escapeMarkdown(currentState.TempUser.ID), syncCode)
